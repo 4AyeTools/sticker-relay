@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import appIconUrl from '../src-tauri/icon-source.svg';
@@ -7,16 +7,32 @@ import FeishuPanel from './components/FeishuPanel';
 import StickerGrid from './components/StickerGrid';
 import WechatPanel from './components/WechatPanel';
 
+type ExitDialogMode = 'generic' | 'wechat';
+
 export default function App() {
   const [stickers, setStickers] = useState<StickerRecord[]>([]);
   const [notice, setNotice] = useState('表情只保存在本机；微信登录状态会加密保留，方便下次继续使用。');
   const [startupNotice, setStartupNotice] = useState<{ title: string; message: string } | null>(null);
   const [exporting, setExporting] = useState(false);
-  const [exitDialogOpen, setExitDialogOpen] = useState(false);
+  const [exitDialogMode, setExitDialogMode] = useState<ExitDialogMode | null>(null);
   const [exitAction, setExitAction] = useState<'keep' | 'logout' | null>(null);
+  const exitCheckInFlight = useRef(false);
 
   const refresh = useCallback(async () => {
     setStickers(await window.desktop.stickers.list());
+  }, []);
+
+  const requestClose = useCallback(async () => {
+    if (exitCheckInFlight.current) return;
+    exitCheckInFlight.current = true;
+    try {
+      const status = await window.desktop.wechat.status();
+      setExitDialogMode(status.state === 'logged-in' || status.state === 'restoring' ? 'wechat' : 'generic');
+    } catch {
+      setExitDialogMode('generic');
+    } finally {
+      exitCheckInFlight.current = false;
+    }
   }, []);
 
   useEffect(() => {
@@ -67,7 +83,7 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     void appWindow.onCloseRequested((event) => {
       event.preventDefault();
-      setExitDialogOpen(true);
+      void requestClose();
     }).then((cleanup) => {
       if (disposed) cleanup();
       else unlisten = cleanup;
@@ -76,16 +92,16 @@ export default function App() {
       disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [requestClose]);
 
   useEffect(() => {
-    if (!exitDialogOpen || exitAction) return undefined;
+    if (!exitDialogMode || exitAction) return undefined;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setExitDialogOpen(false);
+      if (event.key === 'Escape') setExitDialogMode(null);
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [exitAction, exitDialogOpen]);
+  }, [exitAction, exitDialogMode]);
 
   const counts = useMemo(() => ({
     total: stickers.length,
@@ -109,7 +125,7 @@ export default function App() {
 
   const minimizeWindow = () => void getCurrentWindow().minimize();
   const toggleMaximizeWindow = () => void getCurrentWindow().toggleMaximize();
-  const closeWindow = () => setExitDialogOpen(true);
+  const closeWindow = () => void requestClose();
 
   const finishExit = async (action: 'keep' | 'logout') => {
     setExitAction(action);
@@ -122,6 +138,8 @@ export default function App() {
       setNotice(`关闭前处理失败：${error instanceof Error ? error.message : String(error)}`);
     }
   };
+
+  const hasWechatSession = exitDialogMode === 'wechat';
 
   return (
     <div className="app-shell">
@@ -208,33 +226,41 @@ export default function App() {
         <StickerGrid stickers={stickers} onUpdated={refresh} onNotice={setNotice} />
       </main>
 
-      {exitDialogOpen && (
+      {exitDialogMode && (
         <div className="exit-backdrop" role="presentation">
           <section className="exit-dialog" role="dialog" aria-modal="true" aria-labelledby="exit-dialog-title">
             <div className="exit-dialog-mark" aria-hidden="true">递</div>
             <div className="exit-dialog-copy">
-              <span className="exit-dialog-eyebrow">下次接着搬</span>
-              <h2 id="exit-dialog-title">表情还在路上，要先关掉吗？</h2>
-              <p>保留微信登录后，下次打开会自动继续监听文件传输助手，不用重新扫码。</p>
+              <span className="exit-dialog-eyebrow">{hasWechatSession ? '下次接着搬' : '今天先到这里'}</span>
+              <h2 id="exit-dialog-title">{hasWechatSession ? '表情还在路上，要先关掉吗？' : '要关闭表情递吗？'}</h2>
+              <p>
+                {hasWechatSession
+                  ? '保留微信登录后，下次打开会自动继续监听文件传输助手，不用重新扫码。'
+                  : '本地表情和迁移记录仍会保留，下次打开可以继续递送。'}
+              </p>
               <div className="exit-security-note">
                 <span aria-hidden="true">✓</span>
-                登录状态使用系统账户级安全存储（Windows DPAPI / macOS Keychain），仅保存在本机。
+                {hasWechatSession
+                  ? '登录状态使用系统账户级安全存储（Windows DPAPI / macOS Keychain），仅保存在本机。'
+                  : '关闭应用不会删除本地表情，也不会撤回已经发送到飞书的消息。'}
               </div>
             </div>
             <div className="exit-dialog-actions">
-              <button
-                className="secondary-button danger-button"
-                type="button"
-                disabled={exitAction !== null}
-                onClick={() => void finishExit('logout')}
-              >
-                {exitAction === 'logout' ? '正在退出微信…' : '退出微信并关闭'}
-              </button>
+              {hasWechatSession && (
+                <button
+                  className="secondary-button danger-button"
+                  type="button"
+                  disabled={exitAction !== null}
+                  onClick={() => void finishExit('logout')}
+                >
+                  {exitAction === 'logout' ? '正在退出微信…' : '退出微信并关闭'}
+                </button>
+              )}
               <button
                 className="secondary-button"
                 type="button"
                 disabled={exitAction !== null}
-                onClick={() => setExitDialogOpen(false)}
+                onClick={() => setExitDialogMode(null)}
               >
                 继续使用
               </button>
@@ -244,10 +270,14 @@ export default function App() {
                 disabled={exitAction !== null}
                 onClick={() => void finishExit('keep')}
               >
-                {exitAction === 'keep' ? '正在安全保存…' : '保留登录并关闭'}
+                {exitAction === 'keep'
+                  ? (hasWechatSession ? '正在安全保存…' : '正在关闭…')
+                  : (hasWechatSession ? '保留登录并关闭' : '直接关闭')}
               </button>
             </div>
-            <small className="exit-logout-hint">选择“退出微信并关闭”后，下次需要重新扫码。</small>
+            {hasWechatSession && (
+              <small className="exit-logout-hint">选择“退出微信并关闭”后，下次需要重新扫码。</small>
+            )}
           </section>
         </div>
       )}
