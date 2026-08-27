@@ -1,6 +1,9 @@
 use std::{fs, path::Path};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
+
+#[cfg(not(target_os = "macos"))]
+use anyhow::anyhow;
 
 #[cfg(target_os = "macos")]
 use security_framework::passwords::{
@@ -149,12 +152,11 @@ fn unprotect(_ciphertext: &[u8]) -> Result<Vec<u8>> {
     Err(anyhow!("当前系统暂不支持读取微信登录状态"))
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::{protect, unprotect};
 
     #[test]
-    #[cfg(windows)]
     fn dpapi_round_trip() {
         let source = b"sticker-relay-wechat-session-test";
         let encrypted = protect(source).expect("protect");

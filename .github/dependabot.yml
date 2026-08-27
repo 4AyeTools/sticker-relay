@@ -2,8 +2,12 @@ version: 2
 updates:
   - package-ecosystem: npm
     directory: /
+    open-pull-requests-limit: 1
     schedule:
       interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Asia/Shanghai
     groups:
       frontend-dependencies:
         patterns:
@@ -11,8 +15,12 @@ updates:
 
   - package-ecosystem: cargo
     directory: /src-tauri
+    open-pull-requests-limit: 1
     schedule:
       interval: weekly
+      day: wednesday
+      time: "04:00"
+      timezone: Asia/Shanghai
     groups:
       rust-dependencies:
         patterns:
@@ -20,5 +28,12 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    open-pull-requests-limit: 1
     schedule:
       interval: monthly
+      time: "05:00"
+      timezone: Asia/Shanghai
+    groups:
+      github-actions:
+        patterns:
+          - "*"
