@@ -1,0 +1,20 @@
+表情递 (StickerRelay)
+Copyright 2026 AYECODE
+
+This product is licensed under the Apache License, Version 2.0.
+
+The application can download and execute the official Lark/Feishu CLI as an
+optional, separately updated component. The CLI is not part of this source
+repository and is licensed separately:
+
+  lark-cli
+  Copyright (c) 2026 Lark Technologies Pte. Ltd.
+  License: MIT
+  Source: https://github.com/larksuite/cli
+
+微信、WeChat、飞书、Feishu、Lark 及相关标识归各自权利人所有。本项目不是腾讯、
+字节跳动、飞书或 Lark 的官方项目，也未获得其背书。
+
+The Windows installer template is adapted from Tauri CLI v2.11.4, licensed
+under Apache-2.0 OR MIT:
+  https://github.com/tauri-apps/tauri

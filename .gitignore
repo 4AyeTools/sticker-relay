@@ -1,0 +1,42 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Downloaded optional components are installed at runtime and must not enter Git history.
+src-tauri/resources/lark-cli
+src-tauri/resources/lark-cli.exe
+src-tauri/resources/lark-cli-*
+
+# Release, signing and updater material.
+release/
+artifacts/
+*.pfx
+*.p12
+*.cer
+*.key
+*.pem
+*.sig
+*.zip.sha256
+*.exe.sha256
+*.dmg.sha256
