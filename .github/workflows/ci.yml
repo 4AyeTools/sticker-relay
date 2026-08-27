@@ -102,4 +102,4 @@ jobs:
           workspaces: src-tauri
           key: bundle-${{ matrix.label }}
       - run: npm ci
-      - run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --features custom-protocol --ci --no-sign
+      - run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ startsWith(matrix.label, 'macos-') && 'app,dmg' || matrix.bundles }} --features custom-protocol --ci --no-sign
