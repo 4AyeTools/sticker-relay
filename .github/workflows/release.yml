@@ -90,7 +90,7 @@ jobs:
           version="$(node -p "require('./package.json').version")"
           syft dir:. -o "spdx-json=release/sticker-relay-${version}-${{ matrix.label }}.spdx.json"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.label }}
           path: release/*
@@ -120,7 +120,7 @@ jobs:
           generate_release_notes: true
           files: release/*
           fail_on_unmatched_files: true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         with:
           name: sticker-relay-release-preview
