@@ -11,6 +11,8 @@ permissions:
 
 jobs:
   build:
+    env:
+      APPLE_SIGNING_CONFIGURED: ${{ secrets.APPLE_CERTIFICATE != '' && 'true' || 'false' }}
     strategy:
       fail-fast: false
       matrix:
@@ -60,8 +62,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: ./scripts/build-windows-release.ps1 -Target '${{ matrix.target }}' -Label '${{ matrix.label }}'
 
-      - name: Build macOS release
-        if: matrix.platform == 'macos'
+      - name: Build signed macOS release
+        if: matrix.platform == 'macos' && env.APPLE_SIGNING_CONFIGURED == 'true'
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -77,6 +79,11 @@ jobs:
           args: >-
             --target ${{ matrix.target }} --bundles app,dmg --features custom-protocol --ci
             ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && '--config src-tauri/tauri.updater.conf.json' || '' }}
+
+      - name: Build unsigned macOS release
+        if: matrix.platform == 'macos' && env.APPLE_SIGNING_CONFIGURED != 'true'
+        shell: bash
+        run: npm run tauri build -- --target '${{ matrix.target }}' --bundles app,dmg --features custom-protocol --ci --no-sign
 
       - name: Package macOS assets
         if: matrix.platform == 'macos'
