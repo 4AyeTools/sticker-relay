@@ -8,9 +8,9 @@ mod wechat;
 use std::{path::PathBuf, sync::Arc};
 
 use models::{
-    ExportResult, FeishuCliStatus, FeishuSelf, FeishuSendProgress, FeishuSendRequest,
-    FeishuSendState, StickerLibraryChangeResult, StickerLibraryLocation, StickerRecord,
-    WechatLoginState, WechatQrResult,
+    ExportResult, FeishuCliStatus, FeishuLoginAdvance, FeishuSelf, FeishuSendProgress,
+    FeishuSendRequest, FeishuSendState, StickerLibraryChangeResult, StickerLibraryLocation,
+    StickerRecord, WechatLoginState, WechatQrResult,
 };
 use settings::AppSettings;
 use store::StickerStore;
@@ -243,14 +243,21 @@ async fn feishu_login_open(app: AppHandle, state: State<'_, AppState>) -> Result
 }
 
 #[tauri::command]
-async fn feishu_login_finish(state: State<'_, AppState>) -> Result<FeishuCliStatus, String> {
-    state
+async fn feishu_login_finish(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<FeishuLoginAdvance, String> {
+    let advance = state
         .feishu
         .lock()
         .await
         .finish_login()
         .await
-        .map_err(error_text)
+        .map_err(error_text)?;
+    if let Some(session) = advance.session.as_ref() {
+        open_feishu_authorization(&app, &session.verification_url)?;
+    }
+    Ok(advance)
 }
 
 #[tauri::command]

@@ -189,7 +189,9 @@ export default function FeishuPanel({ stickerCount, pendingCount, onNotice, onUp
     try {
       const session = await window.desktop.feishu.startLogin();
       setLoginSession(session);
-      onNotice('飞书授权页已打开，请在浏览器中确认授权。');
+      onNotice(session.stage === 'config'
+        ? '首次连接需要先配置飞书应用，配置页已在浏览器中打开。'
+        : '飞书账号授权页已打开，请在浏览器中确认授权。');
     } catch (error) {
       onNotice(error instanceof Error ? error.message : String(error));
       await checkStatus(false);
@@ -201,10 +203,17 @@ export default function FeishuPanel({ stickerCount, pendingCount, onNotice, onUp
   const finishLogin = async () => {
     setFinishingLogin(true);
     try {
-      const nextStatus = await window.desktop.feishu.finishLogin();
-      setStatus(nextStatus);
-      setLoginSession(null);
-      onNotice('飞书已连接，可以把表情递给自己了。');
+      const advance = await window.desktop.feishu.finishLogin();
+      if (advance.session) {
+        setLoginSession(advance.session);
+        onNotice('飞书应用配置完成，账号授权页已自动打开，请继续确认授权。');
+      } else if (advance.status) {
+        setStatus(advance.status);
+        setLoginSession(null);
+        onNotice('飞书已连接，可以把表情递给自己了。');
+      } else {
+        throw new Error('飞书连接组件未返回有效的授权结果');
+      }
     } catch (error) {
       onNotice(error instanceof Error ? error.message : String(error));
     } finally {
@@ -320,7 +329,12 @@ export default function FeishuPanel({ stickerCount, pendingCount, onNotice, onUp
             </>
           ) : loginSession ? (
             <>
-              <strong>请在浏览器中完成飞书授权</strong>
+              <strong>{loginSession.stage === 'config'
+                ? '第一步：在浏览器中配置飞书应用'
+                : '第二步：授权飞书账号'}</strong>
+              <span>{loginSession.stage === 'config'
+                ? '这是首次连接所需的一次性配置；完成后程序会自动打开账号授权页。'
+                : '确认应用请求的通讯录与消息权限，完成后返回这里继续。'}</span>
               {loginSession.userCode && (
                 <span>如果网页要求输入授权码：<code className="auth-code">{loginSession.userCode}</code></span>
               )}
@@ -330,7 +344,9 @@ export default function FeishuPanel({ stickerCount, pendingCount, onNotice, onUp
                 </button>
                 <button className="secondary-button" onClick={cancelLogin}>取消</button>
                 <button className="primary-button" onClick={finishLogin} disabled={finishingLogin}>
-                  {finishingLogin ? '正在确认…' : '我已完成授权'}
+                  {finishingLogin
+                    ? '正在确认…'
+                    : loginSession.stage === 'config' ? '我已完成应用配置' : '我已完成账号授权'}
                 </button>
               </div>
             </>
