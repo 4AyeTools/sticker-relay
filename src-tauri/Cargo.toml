@@ -1,6 +1,6 @@
 [package]
 name = "sticker-relay"
-version = "0.4.1"
+version = "0.4.2"
 description = "表情递：把收藏的表情递到下一个平台。"
 authors = ["AYECODE"]
 license = "Apache-2.0"
