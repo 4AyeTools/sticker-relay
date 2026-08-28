@@ -26,17 +26,56 @@ interface Props {
 
 const AUTO_CHECK_INTERVAL = 12 * 60 * 60 * 1000;
 const AUTO_CHECK_STORAGE_KEY = 'sticker-relay:last-app-update-check';
+const UPDATE_CHECK_TIMEOUTS = [20_000, 35_000, 50_000] as const;
 let automaticCheckStarted = false;
+
+function isRetryableNetworkError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /error sending request|network|fetch|connect|connection|dns|timed? ?out|temporar|tls/i.test(message);
+}
 
 function errorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/release json|valid release|status code 404/i.test(message)) {
     return '更新服务还没有准备好，请稍后再试。';
   }
-  if (/network|fetch|connect|dns|timed? ?out/i.test(message)) {
+  if (isRetryableNetworkError(error)) {
     return '暂时无法连接更新服务，请检查网络后重试。';
   }
   return message || '检查更新失败，请稍后重试。';
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function summarizeUpdate(update: Update, fallbackCurrentVersion: string): UpdateSummary {
+  const raw = update.rawJson ?? {};
+  return {
+    currentVersion: optionalString(update.currentVersion) ?? fallbackCurrentVersion,
+    version: optionalString(update.version) ?? optionalString(raw.version) ?? '',
+    date: optionalString(update.date) ?? optionalString(raw.pub_date),
+    body: optionalString(update.body) ?? optionalString(raw.notes),
+  };
+}
+
+async function waitForRetry(delay: number): Promise<void> {
+  await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
+}
+
+async function checkWithRetry(): Promise<Update | null> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < UPDATE_CHECK_TIMEOUTS.length; attempt += 1) {
+    try {
+      return await check({ timeout: UPDATE_CHECK_TIMEOUTS[attempt] });
+    } catch (checkError) {
+      lastError = checkError;
+      const hasNextAttempt = attempt + 1 < UPDATE_CHECK_TIMEOUTS.length;
+      if (!hasNextAttempt || !isRetryableNetworkError(checkError)) throw checkError;
+      await waitForRetry(800 * (attempt + 1));
+    }
+  }
+  throw lastError ?? new Error('检查更新失败。');
 }
 
 function formatDate(value?: string): string | null {
@@ -74,7 +113,7 @@ export default function AppUpdater({ onNotice, onPrepareInstall }: Props) {
     setError('');
     try {
       await releaseUpdate();
-      const update = await check({ timeout: 20_000 });
+      const update = await checkWithRetry();
       try {
         window.localStorage.setItem(AUTO_CHECK_STORAGE_KEY, String(Date.now()));
       } catch {
@@ -86,16 +125,16 @@ export default function AppUpdater({ onNotice, onPrepareInstall }: Props) {
         return;
       }
       updateRef.current = update;
-      setSummary({
-        currentVersion: update.currentVersion,
-        version: update.version,
-        date: update.date,
-        body: update.body,
-      });
+      const fallbackCurrentVersion = currentVersion || await getVersion().catch(() => '');
+      const nextSummary = summarizeUpdate(update, fallbackCurrentVersion);
+      setSummary(nextSummary);
+      if (!currentVersion && nextSummary.currentVersion) setCurrentVersion(nextSummary.currentVersion);
       setProgress({ downloaded: 0 });
       setStage('available');
       setDialogOpen(true);
-      onNotice(`发现表情递 v${update.version}，可以在应用内更新。`);
+      onNotice(nextSummary.version
+        ? `发现表情递 v${nextSummary.version}，可以在应用内更新。`
+        : '发现表情递新版本，可以在应用内更新。');
     } catch (checkError) {
       const message = errorMessage(checkError);
       setErrorOrigin('check');
@@ -151,7 +190,7 @@ export default function AppUpdater({ onNotice, onPrepareInstall }: Props) {
         } else if (event.event === 'Finished') {
           setProgress((previous) => ({ ...previous, downloaded: previous.total ?? previous.downloaded }));
         }
-      });
+      }, { timeout: 120_000 });
       setStage('installing');
       onNotice('更新包验证完成，正在安全保存会话并安装…');
       await onPrepareInstall();
@@ -205,16 +244,18 @@ export default function AppUpdater({ onNotice, onPrepareInstall }: Props) {
               <h2 id="update-dialog-title">
                 {stage === 'error'
                   ? '这次更新没有完成'
-                  : `表情递 v${summary?.version ?? ''} 已经到站`}
+                  : summary?.version
+                    ? `表情递 v${summary.version} 已经到站`
+                    : '表情递新版本已经到站'}
               </h2>
               {stage === 'error' ? (
                 <p className="update-error-message">{error}</p>
               ) : (
                 <>
                   <div className="update-version-row">
-                    <span>当前 v{summary?.currentVersion}</span>
+                    <span>{summary?.currentVersion ? `当前 v${summary.currentVersion}` : '当前版本'}</span>
                     <i aria-hidden="true">→</i>
-                    <strong>新版 v{summary?.version}</strong>
+                    <strong>{summary?.version ? `新版 v${summary.version}` : '可用新版本'}</strong>
                     {releaseDate && <time>{releaseDate}</time>}
                   </div>
                   <div className="update-release-notes">

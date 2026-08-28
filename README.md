@@ -55,7 +55,8 @@ macOS 在代码层面可以兼容：Tauri、React、HTTP 采集和飞书 CLI 都
 表情递使用 Tauri 官方 Updater 检查
 `https://github.com/4AyeTools/sticker-relay/releases/latest/download/latest.json`。启动后每
 12 小时静默检查一次，标题区也提供手动检查入口。发现新版本后会展示发行说明、下载
-进度和失败重试；更新包通过独立的 Tauri 签名验证后才会安装。
+进度和失败重试；检查 GitHub 时如果遇到瞬时连接失败，会自动重试并显示中文
+错误说明。更新包通过独立的 Tauri 签名验证后才会安装。
 
 下载安装前会先保存微信会话。更新应用不会清理本地表情库、迁移记录或独立安装的飞书
 CLI。`0.3.1` 及更早版本没有内置 updater，因此需要手动安装 `0.4.0` 一次；之后才可在
