@@ -53,16 +53,20 @@ if ($importedCertificate) {
 $installerName = "sticker-relay-$version-$Label-setup.exe"
 Copy-Item -LiteralPath $installer.FullName -Destination (Join-Path $releaseOutput $installerName) -Force
 
+if ($env:TAURI_SIGNING_PRIVATE_KEY) {
+  $updaterSignature = "$($installer.FullName).sig"
+  if (-not (Test-Path -LiteralPath $updaterSignature)) {
+    throw 'Tauri updater signature was not generated for the Windows installer'
+  }
+  Copy-Item -LiteralPath $updaterSignature -Destination (Join-Path $releaseOutput "$installerName.sig") -Force
+}
+
 $portableRoot = Join-Path ([IO.Path]::GetTempPath()) "sticker-relay-$version-$Label-portable-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null
 Copy-Item -LiteralPath $binaryPath -Destination (Join-Path $portableRoot 'sticker-relay.exe') -Force
 Copy-Item -LiteralPath LICENSE, NOTICE, THIRD_PARTY_LICENSES.md -Destination $portableRoot -Force
 Copy-Item -LiteralPath distribution\PORTABLE_README.txt -Destination (Join-Path $portableRoot 'README.txt') -Force
 Compress-Archive -Path (Join-Path $portableRoot '*') -DestinationPath (Join-Path $releaseOutput "sticker-relay-$version-$Label-portable.zip") -Force
-
-Get-ChildItem -LiteralPath (Join-Path $releaseRoot 'bundle') -Recurse -File |
-  Where-Object { $_.Extension -in '.sig', '.zip' } |
-  ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $releaseOutput -Force }
 
 if ($importedCertificate) {
   Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($importedCertificate.Thumbprint)" -Force
