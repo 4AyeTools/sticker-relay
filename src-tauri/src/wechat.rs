@@ -555,13 +555,14 @@ async fn scan_once(
     if let Some(items) = data.get("MsgList").and_then(Value::as_array) {
         messages.extend(items.iter().cloned());
     }
-    process_messages(messages, &client, seen, store, app).await?;
+    process_messages(messages, &client, &session, seen, store, app).await?;
     Ok(ScanOutcome::Active)
 }
 
 async fn process_messages(
     messages: Vec<Value>,
     client: &Client,
+    session: &WechatSession,
     seen: &Arc<Mutex<HashSet<String>>>,
     store: &Arc<Mutex<StickerStore>>,
     app: &AppHandle,
@@ -583,25 +584,15 @@ async fn process_messages(
             .get("NewMsgId")
             .or_else(|| message.get("MsgId"))
             .map(value_to_string);
-        let unsupported_key = message_id.as_ref().map(|id| format!("unsupported:{id}"));
         let msg_type = message
             .get("MsgType")
             .and_then(Value::as_i64)
             .unwrap_or_default();
-        let is_unsupported = content.contains("该类型暂不支持")
-            || (msg_type == 1
-                && message.get("ImgStatus").and_then(Value::as_i64) == Some(2)
-                && message.get("HasProductId").and_then(Value::as_i64) == Some(1));
-        if is_unsupported {
-            if let Some(key) = unsupported_key {
-                let mut seen_values = seen.lock().await;
-                if seen_values.insert(key) {
-                    unsupported += 1;
-                }
-            }
+        let is_product_sticker = is_product_sticker_message(&message, content);
+        if msg_type != 47 && !is_product_sticker {
             continue;
         }
-        if msg_type != 47 || content.is_empty() {
+        if content.is_empty() && message_id.is_none() {
             continue;
         }
 
@@ -614,7 +605,7 @@ async fn process_messages(
         if seen.lock().await.contains(&key) {
             continue;
         }
-        let urls = rank_urls(extract_emoji_urls(content));
+        let urls = sticker_download_urls(content, message_id.as_deref(), &session.skey);
         if urls.is_empty() {
             seen.lock().await.insert(key);
             unsupported += 1;
@@ -636,7 +627,12 @@ async fn process_messages(
                 skipped += 1;
                 seen.lock().await.insert(key);
             }
-            _ => unsupported += 1,
+            _ => {
+                unsupported += 1;
+                if is_product_sticker {
+                    seen.lock().await.insert(key);
+                }
+            }
         }
     }
 
@@ -684,11 +680,12 @@ async fn download_first_valid(
         if sniff_image_mime(&bytes).is_none() {
             continue;
         }
+        let source_url = sanitize_sticker_source_url(&url);
         let result = store.lock().await.add_buffer(
             &bytes,
             mime_type.as_deref(),
             wechat_md5.clone(),
-            Some(url),
+            Some(source_url),
         )?;
         if result.record.is_some() {
             return Ok(Some(result));
@@ -909,22 +906,61 @@ fn extract_emoji_md5(content: &str) -> Option<String> {
         .map(|value| value.as_str().to_lowercase())
 }
 
+fn is_product_sticker_message(message: &Value, content: &str) -> bool {
+    content.contains("该类型暂不支持")
+        || (message.get("MsgType").and_then(Value::as_i64) == Some(1)
+            && message.get("ImgStatus").and_then(Value::as_i64) == Some(2)
+            && message.get("HasProductId").and_then(Value::as_i64) == Some(1))
+}
+
+fn message_image_url(message_id: &str, skey: &str) -> Option<String> {
+    let mut url = Url::parse(&format!(
+        "{FILEHELPER_ORIGIN}/cgi-bin/mmwebwx-bin/webwxgetmsgimg"
+    ))
+    .ok()?;
+    url.query_pairs_mut()
+        .append_pair("msgid", message_id)
+        .append_pair("skey", skey);
+    Some(url.to_string())
+}
+
+fn sanitize_sticker_source_url(raw: &str) -> String {
+    if !raw.contains("/webwxgetmsgimg") {
+        return raw.to_string();
+    }
+    let Ok(mut url) = Url::parse(raw) else {
+        return raw.to_string();
+    };
+    url.set_query(None);
+    url.to_string()
+}
+
+fn sticker_download_urls(content: &str, message_id: Option<&str>, skey: &str) -> Vec<String> {
+    let mut urls = extract_emoji_urls(content);
+    if let Some(url) = message_id.and_then(|value| message_image_url(value, skey)) {
+        urls.push(url);
+    }
+    rank_urls(urls)
+}
+
 fn rank_urls(mut urls: Vec<String>) -> Vec<String> {
     urls.sort_by_key(|url| {
-        if url.contains("/20401/") {
+        if url.contains("/webwxgetmsgimg") {
             0
-        } else if url.contains("cdnurl") {
+        } else if url.contains("/20401/") {
             1
+        } else if url.contains("cdnurl") {
+            2
         } else if url.contains("/20402/") {
-            2
-        } else if url.contains("extern") {
             3
-        } else if url.contains("encrypt") {
+        } else if url.contains("extern") {
             4
-        } else if url.contains("thumb") {
+        } else if url.contains("encrypt") {
             5
+        } else if url.contains("thumb") {
+            6
         } else {
-            2
+            3
         }
     });
     urls.dedup();
@@ -955,10 +991,12 @@ mod tests {
     use std::time::Duration;
 
     use reqwest::{cookie::CookieStore as _, header::HeaderValue};
+    use serde_json::json;
     use url::Url;
 
     use super::{
-        extract_emoji_md5, extract_emoji_urls, now_millis, PersistentCookieStore, WechatCollector,
+        extract_emoji_md5, extract_emoji_urls, is_product_sticker_message, now_millis,
+        sanitize_sticker_source_url, sticker_download_urls, PersistentCookieStore, WechatCollector,
     };
 
     #[test]
@@ -972,6 +1010,48 @@ mod tests {
             extract_emoji_urls(content),
             vec!["https://emoji.qpic.cn/example.gif"]
         );
+    }
+
+    #[test]
+    fn prefers_authenticated_message_image_for_store_stickers() {
+        let content = r#"<msg><emoji md5="0123456789abcdef0123456789abcdef" productid="com.tencent.xin.emoticon.album" cdnurl="https://emoji.qpic.cn/wx_emoji/direct" encrypturl="https://emoji.qpic.cn/wx_emoji/encrypted" aeskey="a911cc2ec96ddb781b5ca85d24143642" /></msg>"#;
+        let urls = sticker_download_urls(content, Some("123456789"), "@crypt_skey");
+
+        let fallback = Url::parse(&urls[0]).expect("message image URL");
+        assert_eq!(fallback.path(), "/cgi-bin/mmwebwx-bin/webwxgetmsgimg");
+        assert!(fallback
+            .query_pairs()
+            .any(|(name, value)| name == "msgid" && value == "123456789"));
+        assert!(fallback
+            .query_pairs()
+            .any(|(name, value)| name == "skey" && value == "@crypt_skey"));
+        let stored_source = sanitize_sticker_source_url(&urls[0]);
+        assert!(!stored_source.contains("crypt_skey"));
+        assert!(!stored_source.contains("123456789"));
+        assert_eq!(
+            Url::parse(&stored_source).expect("sanitized source").path(),
+            "/cgi-bin/mmwebwx-bin/webwxgetmsgimg"
+        );
+        assert!(urls.iter().any(|url| url.ends_with("/direct")));
+        assert!(urls.iter().any(|url| url.ends_with("/encrypted")));
+    }
+
+    #[test]
+    fn retries_product_sticker_placeholders_through_message_image_endpoint() {
+        let message = json!({
+            "MsgType": 1,
+            "ImgStatus": 2,
+            "HasProductId": 1,
+            "Content": "该类型暂不支持，请在手机上查看"
+        });
+
+        assert!(is_product_sticker_message(
+            &message,
+            message["Content"].as_str().expect("content")
+        ));
+        let urls = sticker_download_urls("", Some("987654321"), "@skey");
+        assert_eq!(urls.len(), 1);
+        assert!(urls[0].contains("/webwxgetmsgimg?"));
     }
 
     #[test]

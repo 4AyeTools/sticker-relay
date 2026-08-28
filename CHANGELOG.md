@@ -12,10 +12,15 @@
 - 接入 Tauri 官方 Updater/Process 插件，Windows、macOS Intel 和 macOS Apple Silicon 均按当前架构选择更新包；
 - Release 自动生成三平台 updater 产物、`.sig` 签名和 `latest.json`，并继续纳入 SHA-256 与 SBOM 发布流程。
 
+### 修复
+
+- 微信表情商店/专辑表情优先通过当前登录会话的消息图片接口下载；接口不可用时再回退到 CDN 地址，避免加密资源或产品表情占位消息被直接判定为不支持。
+
 ### 安全
 
 - 应用内安装强制验证独立的 Tauri Updater 签名，私钥仅存本地离线备份和 GitHub Actions Secret，公钥编译进应用；
 - Tauri 更新签名与可选的 Windows Authenticode、Apple Developer ID 签名相互独立。
+- 微信消息图片接口仅在请求阶段携带会话参数，写入本地表情记录前会移除 `skey` 和消息 ID。
 
 ### 升级说明
 
