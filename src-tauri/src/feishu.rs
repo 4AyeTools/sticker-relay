@@ -2,6 +2,7 @@ use std::{
     env, fs,
     io::{Cursor, Read},
     path::{Path, PathBuf},
+    process::Stdio,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -16,15 +17,16 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 use tokio::{
-    process::Command,
+    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
+    process::{Child, ChildStderr, Command},
     sync::Mutex,
     time::{sleep, timeout},
 };
 
 use crate::{
     models::{
-        FeishuCliProgress, FeishuCliStatus, FeishuDestination, FeishuLoginSession, FeishuSelf,
-        FeishuSendProgress, StickerRecord,
+        FeishuCliProgress, FeishuCliStatus, FeishuDestination, FeishuLoginAdvance,
+        FeishuLoginSession, FeishuSelf, FeishuSendProgress, StickerRecord,
     },
     store::StickerStore,
 };
@@ -43,9 +45,21 @@ struct CliResult {
     stderr: String,
 }
 
-struct PendingLogin {
+struct PendingAuthorization {
     device_code: String,
     session: FeishuLoginSession,
+}
+
+struct PendingConfiguration {
+    child: Child,
+    stderr: BufReader<ChildStderr>,
+    output: String,
+    session: FeishuLoginSession,
+}
+
+enum PendingLogin {
+    Configuration(Box<PendingConfiguration>),
+    Authorization(PendingAuthorization),
 }
 
 #[derive(Clone)]
@@ -219,6 +233,8 @@ impl FeishuCli {
             authenticated,
             detail: Some(if authenticated {
                 "飞书 CLI 用户身份已登录".to_string()
+            } else if is_not_configured_result(&auth_result) {
+                "首次连接需要先配置飞书应用，点击“连接飞书”后按浏览器提示完成两步授权。".to_string()
             } else {
                 identity_detail.unwrap_or_else(|| error_text(&auth_result))
             }),
@@ -319,6 +335,11 @@ impl FeishuCli {
     }
 
     pub async fn start_login(&mut self) -> Result<FeishuLoginSession> {
+        self.cancel_login();
+        self.start_authorization().await
+    }
+
+    async fn start_authorization(&mut self) -> Result<FeishuLoginSession> {
         let current = env::current_dir().unwrap_or_default();
         let result = self
             .run(
@@ -335,26 +356,133 @@ impl FeishuCli {
             )
             .await?;
         if result.code != 0 {
+            if is_not_configured_result(&result) {
+                return self.start_configuration().await;
+            }
             return Err(anyhow!(error_text(&result)));
         }
         let pending = parse_login_payload(parse_json(&result.stdout).as_ref())?;
         let session = pending.session.clone();
-        self.pending_login = Some(pending);
+        self.pending_login = Some(PendingLogin::Authorization(pending));
+        Ok(session)
+    }
+
+    async fn start_configuration(&mut self) -> Result<FeishuLoginSession> {
+        let executable = self
+            .resolve_executable()
+            .ok_or_else(|| anyhow!("尚未安装飞书官方连接组件"))?;
+        let current = env::current_dir().unwrap_or_default();
+        let mut command = Command::new(&executable.path);
+        command
+            .args([
+                "config", "init", "--new", "--brand", "feishu", "--lang", "zh_cn",
+            ])
+            .current_dir(&current)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        command.creation_flags(0x0800_0000);
+
+        let mut child = command.spawn().context("无法启动飞书应用配置")?;
+        let child_stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow!("无法读取飞书应用配置输出"))?;
+        let mut stderr = BufReader::new(child_stderr);
+        let mut output = String::new();
+        let verification_url = timeout(Duration::from_secs(30), async {
+            loop {
+                let mut line = String::new();
+                let read = stderr.read_line(&mut line).await?;
+                if read == 0 {
+                    let status = child.wait().await?;
+                    let result = CliResult {
+                        code: status.code().unwrap_or(-1),
+                        stdout: String::new(),
+                        stderr: output.clone(),
+                    };
+                    return Err(anyhow!(error_text(&result)));
+                }
+                output.push_str(&line);
+                if let Some(url) = find_feishu_auth_url(&line) {
+                    return Ok(url);
+                }
+            }
+        })
+        .await
+        .map_err(|_| anyhow!("获取飞书应用配置地址超时，请检查网络后重试"))??;
+
+        let user_code = user_code_from_url(&verification_url);
+        let session = FeishuLoginSession {
+            stage: "config".to_string(),
+            verification_url,
+            user_code,
+            expires_at: Some(now_millis() + Duration::from_secs(600).as_millis() as u64),
+        };
+        self.pending_login = Some(PendingLogin::Configuration(Box::new(
+            PendingConfiguration {
+                child,
+                stderr,
+                output,
+                session: session.clone(),
+            },
+        )));
         Ok(session)
     }
 
     pub fn pending_login_url(&self) -> Option<String> {
-        self.pending_login
-            .as_ref()
-            .map(|pending| pending.session.verification_url.clone())
+        match self.pending_login.as_ref() {
+            Some(PendingLogin::Configuration(pending)) => {
+                Some(pending.session.verification_url.clone())
+            }
+            Some(PendingLogin::Authorization(pending)) => {
+                Some(pending.session.verification_url.clone())
+            }
+            None => None,
+        }
     }
 
-    pub async fn finish_login(&mut self) -> Result<FeishuCliStatus> {
-        let device_code = self
-            .pending_login
-            .as_ref()
-            .map(|pending| pending.device_code.clone())
-            .ok_or_else(|| anyhow!("当前没有待完成的飞书授权，请重新点击“连接飞书”"))?;
+    pub async fn finish_login(&mut self) -> Result<FeishuLoginAdvance> {
+        if matches!(self.pending_login, Some(PendingLogin::Configuration(_))) {
+            let (success, code, detail) = {
+                let Some(PendingLogin::Configuration(pending)) = self.pending_login.as_mut() else {
+                    unreachable!();
+                };
+                let status = timeout(Duration::from_secs(30), pending.child.wait())
+                    .await
+                    .map_err(|_| {
+                        anyhow!("飞书应用配置仍在处理中，请确认浏览器已显示配置成功后再试")
+                    })??;
+                let mut remaining = String::new();
+                pending.stderr.read_to_string(&mut remaining).await?;
+                pending.output.push_str(&remaining);
+                let result = CliResult {
+                    code: status.code().unwrap_or(-1),
+                    stdout: String::new(),
+                    stderr: pending.output.clone(),
+                };
+                (status.success(), result.code, error_text(&result))
+            };
+            self.pending_login = None;
+            if !success {
+                return Err(anyhow!(if detail.is_empty() {
+                    format!("飞书应用配置失败，退出码 {code}")
+                } else {
+                    detail
+                }));
+            }
+            let session = self.start_authorization().await?;
+            return Ok(FeishuLoginAdvance {
+                status: None,
+                session: Some(session),
+            });
+        }
+
+        let device_code = match self.pending_login.as_ref() {
+            Some(PendingLogin::Authorization(pending)) => pending.device_code.clone(),
+            _ => return Err(anyhow!("当前没有待完成的飞书授权，请重新点击“连接飞书”")),
+        };
         let current = env::current_dir().unwrap_or_default();
         let result = self
             .run(
@@ -374,11 +502,16 @@ impl FeishuCli {
                 .clone()
                 .unwrap_or_else(|| "飞书授权尚未完成".into())));
         }
-        Ok(status)
+        Ok(FeishuLoginAdvance {
+            status: Some(status),
+            session: None,
+        })
     }
 
     pub fn cancel_login(&mut self) {
-        self.pending_login = None;
+        if let Some(PendingLogin::Configuration(mut pending)) = self.pending_login.take() {
+            let _ = pending.child.start_kill();
+        }
     }
 
     pub async fn send_batch(
@@ -1099,6 +1232,39 @@ fn extract_version(raw: &str) -> Option<String> {
         .map(|value| value.as_str().to_string())
 }
 
+fn is_not_configured_result(result: &CliResult) -> bool {
+    [&result.stdout, &result.stderr].iter().any(|text| {
+        find_deep_string(parse_json(text).as_ref(), &["subtype"])
+            .is_some_and(|value| value == "not_configured")
+            || text.to_lowercase().contains("not configured")
+            || text.to_lowercase().contains("not_configured")
+    })
+}
+
+fn find_feishu_auth_url(text: &str) -> Option<String> {
+    let pattern = regex::Regex::new(r"https://[^\s\u{001b}]+").ok()?;
+    let found = pattern.find_iter(text).find_map(|matched| {
+        let candidate = matched
+            .as_str()
+            .trim_end_matches(|character: char| {
+                matches!(character, ')' | ']' | '}' | '>' | ',' | ';' | '。' | '，')
+            })
+            .to_string();
+        validate_feishu_auth_url(&candidate)
+            .is_ok()
+            .then_some(candidate)
+    });
+    found
+}
+
+fn user_code_from_url(url: &str) -> Option<String> {
+    url::Url::parse(url)
+        .ok()?
+        .query_pairs()
+        .find(|(key, _)| key == "user_code")
+        .map(|(_, value)| value.to_string())
+}
+
 fn error_text(result: &CliResult) -> String {
     let raw = if !result.stderr.trim().is_empty() {
         result.stderr.as_str()
@@ -1199,7 +1365,7 @@ fn user_identity_state(value: Option<&Value>) -> (Option<bool>, Option<String>) 
     (authenticated, detail)
 }
 
-fn parse_login_payload(value: Option<&Value>) -> Result<PendingLogin> {
+fn parse_login_payload(value: Option<&Value>) -> Result<PendingAuthorization> {
     let device_code = find_deep_string(value, &["device_code", "deviceCode"])
         .ok_or_else(|| anyhow!("飞书连接组件未返回 device_code"))?;
     let verification_url = find_deep_string(
@@ -1224,9 +1390,10 @@ fn parse_login_payload(value: Option<&Value>) -> Result<PendingLogin> {
     });
     let expires_at = find_deep_number(value, &["expires_in", "expiresIn"])
         .map(|seconds| now_millis() + seconds * 1000);
-    Ok(PendingLogin {
+    Ok(PendingAuthorization {
         device_code,
         session: FeishuLoginSession {
+            stage: "authorize".to_string(),
             verification_url,
             user_code,
             expires_at,
@@ -1244,9 +1411,10 @@ fn now_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        checksum_for_archive, cli_binary_name, extract_version, is_allowed_download_url,
-        migrate_managed_component, release_archive_name_for, retry_delay_seconds,
-        validate_feishu_auth_url, DOWNLOAD_ATTEMPTS_PER_SOURCE,
+        checksum_for_archive, cli_binary_name, extract_version, find_feishu_auth_url,
+        is_allowed_download_url, is_not_configured_result, migrate_managed_component,
+        release_archive_name_for, retry_delay_seconds, user_code_from_url,
+        validate_feishu_auth_url, CliResult, DOWNLOAD_ATTEMPTS_PER_SOURCE,
     };
     use semver::Version;
     use std::{fs, time::SystemTime};
@@ -1265,6 +1433,27 @@ mod tests {
         assert!(validate_feishu_auth_url("https://open.larksuite.com/auth").is_ok());
         assert!(validate_feishu_auth_url("https://feishu.cn.evil.example/auth").is_err());
         assert!(validate_feishu_auth_url("http://accounts.feishu.cn/auth").is_err());
+    }
+
+    #[test]
+    fn recognizes_the_cli_not_configured_response() {
+        let result = CliResult {
+            code: 3,
+            stdout: r#"{"ok":false,"error":{"type":"config","subtype":"not_configured","message":"not configured"}}"#.to_string(),
+            stderr: String::new(),
+        };
+        assert!(is_not_configured_result(&result));
+    }
+
+    #[test]
+    fn extracts_only_official_configuration_urls() {
+        let official = "https://open.feishu.cn/page/cli?user_code=ABCD-1234&from=cli";
+        assert_eq!(
+            find_feishu_auth_url(&format!("打开以下链接配置应用:\n  {official}\n")),
+            Some(official.to_string())
+        );
+        assert_eq!(user_code_from_url(official), Some("ABCD-1234".to_string()));
+        assert!(find_feishu_auth_url("https://feishu.cn.evil.example/page/cli").is_none());
     }
 
     #[test]

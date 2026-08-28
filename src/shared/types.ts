@@ -63,9 +63,15 @@ export interface FeishuSelf {
 }
 
 export interface FeishuLoginSession {
+  stage: 'config' | 'authorize';
   verificationUrl: string;
   userCode?: string;
   expiresAt?: number;
+}
+
+export interface FeishuLoginAdvance {
+  status?: FeishuCliStatus;
+  session?: FeishuLoginSession;
 }
 
 export interface StickerLibraryLocation {
@@ -133,7 +139,7 @@ export interface DesktopApi {
     self(): Promise<FeishuSelf>;
     startLogin(): Promise<FeishuLoginSession>;
     openLoginPage(): Promise<void>;
-    finishLogin(): Promise<FeishuCliStatus>;
+    finishLogin(): Promise<FeishuLoginAdvance>;
     cancelLogin(): Promise<void>;
     send(request: FeishuSendRequest): Promise<{ started: boolean; total: number }>;
   };

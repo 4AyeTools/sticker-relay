@@ -116,9 +116,17 @@ pub struct FeishuSelf {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeishuLoginSession {
+    pub stage: String,
     pub verification_url: String,
     pub user_code: Option<String>,
     pub expires_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeishuLoginAdvance {
+    pub status: Option<FeishuCliStatus>,
+    pub session: Option<FeishuLoginSession>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
