@@ -23,6 +23,9 @@ ditto -c -k --sequesterRsrc --keepParent "$app_path" "$output_root/sticker-relay
 updater_archive="$(find "$release_root/bundle/macos" -maxdepth 1 -type f -name '*.app.tar.gz' -print -quit)"
 if [[ "$updater_enabled" == "true" ]]; then
   test -n "$updater_archive"
+  if [[ ! -f "$updater_archive.sig" ]]; then
+    npx tauri signer sign "$updater_archive"
+  fi
   test -f "$updater_archive.sig"
   updater_name="sticker-relay-$version-$label.app.tar.gz"
   cp "$updater_archive" "$output_root/$updater_name"
