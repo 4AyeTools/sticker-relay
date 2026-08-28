@@ -3,6 +3,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import appIconUrl from '../src-tauri/icon-source.svg';
 import type { StickerRecord } from './shared/types';
+import AppUpdater from './components/AppUpdater';
 import FeishuPanel from './components/FeishuPanel';
 import StickerGrid from './components/StickerGrid';
 import WechatPanel from './components/WechatPanel';
@@ -187,6 +188,10 @@ export default function App() {
         </div>
         <div className="hero-actions">
           <span className="privacy-chip"><i />仅保存在本机</span>
+          <AppUpdater
+            onNotice={setNotice}
+            onPrepareInstall={() => window.desktop.wechat.prepareExit()}
+          />
           <button className="secondary-button export-button" disabled={exporting || stickers.length === 0} onClick={exportZip}>
             {exporting ? '正在打包…' : '打包导出'}
           </button>

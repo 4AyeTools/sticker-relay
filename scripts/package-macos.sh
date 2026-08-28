@@ -3,6 +3,7 @@ set -euo pipefail
 
 target="$1"
 label="$2"
+updater_enabled="${3:-false}"
 project_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$project_root"
 
@@ -19,4 +20,11 @@ test -n "$dmg_path"
 cp "$dmg_path" "$output_root/sticker-relay-$version-$label.dmg"
 ditto -c -k --sequesterRsrc --keepParent "$app_path" "$output_root/sticker-relay-$version-$label.app.zip"
 
-find "$release_root/bundle" -type f \( -name '*.sig' -o -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} "$output_root/" \;
+updater_archive="$(find "$release_root/bundle/macos" -maxdepth 1 -type f -name '*.app.tar.gz' -print -quit)"
+if [[ "$updater_enabled" == "true" ]]; then
+  test -n "$updater_archive"
+  test -f "$updater_archive.sig"
+  updater_name="sticker-relay-$version-$label.app.tar.gz"
+  cp "$updater_archive" "$output_root/$updater_name"
+  cp "$updater_archive.sig" "$output_root/$updater_name.sig"
+fi

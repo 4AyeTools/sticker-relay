@@ -18,8 +18,9 @@
 - 关闭时可保留或退出微信登录，Windows 使用 DPAPI，macOS 使用 Keychain；
 - 无需命令行，在界面中完成飞书授权、检查连接和批量发送；
 - 飞书 CLI 按需下载、校验、安装和独立更新，不再塞进主安装包；
+- 启动后自动检查表情递新版本，也可手动检查、查看更新说明并在应用内下载安装；
 - Windows 安装版与便携版，macOS Intel/Apple Silicon 的 App/DMG 分发基础设施；
-- Release 自动生成 SHA-256 校验和与 SPDX JSON SBOM。
+- Release 自动生成 updater 签名、`latest.json`、SHA-256 校验和与 SPDX JSON SBOM。
 
 ## 使用流程
 
@@ -48,6 +49,18 @@ macOS 在代码层面可以兼容：Tauri、React、HTTP 采集和飞书 CLI 都
 微信会话也改用 Keychain。由于开发机是 Windows，macOS 的最终打包、签名与冒烟测试
 由 GitHub Actions 的 macOS runner 完成；未签名构建首次打开时可能受到 Gatekeeper
 提示，正式发布前建议配置 Apple Developer ID 和 notarization。
+
+## 应用更新
+
+表情递使用 Tauri 官方 Updater 检查
+`https://github.com/4AyeTools/sticker-relay/releases/latest/download/latest.json`。启动后每
+12 小时静默检查一次，标题区也提供手动检查入口。发现新版本后会展示发行说明、下载
+进度和失败重试；更新包通过独立的 Tauri 签名验证后才会安装。
+
+下载安装前会先保存微信会话。更新应用不会清理本地表情库、迁移记录或独立安装的飞书
+CLI。`0.3.1` 及更早版本没有内置 updater，因此需要手动安装 `0.4.0` 一次；之后才可在
+应用内持续更新。Windows Authenticode 和 Apple Developer ID 仍属于可选的系统信任
+签名，没有配置时可能继续出现 SmartScreen 或 Gatekeeper 提示。
 
 ## 飞书 CLI 组件
 
@@ -132,6 +145,7 @@ npm run tauri build -- --bundles app,dmg --features custom-protocol
 
 ```text
 React UI
+  ├─ AppUpdater.tsx：检查、下载、签名验证、安装与重启
   └─ tauriBridge.ts：类型化 invoke/event
        └─ Rust Commands
             ├─ wechat.rs：扫码、会话、消息轮询、图片下载
@@ -147,7 +161,7 @@ React UI
 
 开发规则见 [CONTRIBUTING.md](CONTRIBUTING.md)，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 后续方向包括：飞书消息结果重试队列、表情格式/尺寸预检、导入恢复、跨设备清单、更多
-目标平台适配，以及在仓库地址和签名公钥确定后启用应用内自动更新。
+目标平台适配，以及国内更新源与稳定版/预览版更新通道。
 
 ## 许可证
 

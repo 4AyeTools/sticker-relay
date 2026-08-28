@@ -1,6 +1,6 @@
 [package]
 name = "sticker-relay"
-version = "0.3.1"
+version = "0.4.0"
 description = "表情递：把收藏的表情递到下一个平台。"
 authors = ["AYECODE"]
 license = "Apache-2.0"
@@ -45,6 +45,8 @@ tokio = { version = "1", features = ["fs", "macros", "process", "rt-multi-thread
 url = "2"
 urlencoding = "2"
 zip = { version = "4", default-features = false, features = ["deflate"] }
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
