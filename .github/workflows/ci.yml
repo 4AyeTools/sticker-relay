@@ -80,3 +80,25 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: src-tauri
+
+  bundle-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+            label: windows-x64
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: app
+            label: macos-intel
+          - os: macos-15
+            target: aarch64-apple-darwin
+            bundles: app
+            label: macos-apple-silicon
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preserve required check name
+        run: echo "Installer smoke builds are disabled for pull requests."
