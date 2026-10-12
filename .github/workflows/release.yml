@@ -90,18 +90,24 @@ jobs:
             --target ${{ matrix.target }} --bundles app,dmg --features custom-protocol --ci
             ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && '--config src-tauri/tauri.updater.conf.json' || '' }}
 
-      - name: Build unsigned macOS release
+      - name: Build ad-hoc signed macOS release
         if: matrix.platform == 'macos' && env.APPLE_SIGNING_CONFIGURED != 'true'
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          updater_args=()
+          # Without an Apple certificate Tauri would ship an app whose main binary only
+          # carries the linker's ad-hoc signature and has no _CodeSignature/CodeResources.
+          # macOS 26 rejects that bundle ("code has no resources but signature indicates
+          # they must be present"), so Gatekeeper marks the downloaded app as damaged.
+          # signingIdentity "-" makes Tauri ad-hoc sign the bundle, which passes
+          # codesign verification and downgrades the verdict from Fatal to a warning.
+          config_args=(--config src-tauri/tauri.adhoc-sign.conf.json)
           if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
-            updater_args=(--config src-tauri/tauri.updater.conf.json)
+            config_args+=(--config src-tauri/tauri.updater.conf.json)
           fi
-          npm run tauri build -- --target '${{ matrix.target }}' --bundles app,dmg --features custom-protocol --ci --no-sign "${updater_args[@]}"
+          npm run tauri build -- --target '${{ matrix.target }}' --bundles app,dmg --features custom-protocol --ci "${config_args[@]}"
 
       - name: Package macOS assets
         if: matrix.platform == 'macos'
